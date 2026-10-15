@@ -3,6 +3,7 @@ import Foundation
 func runVoiceFileTests() {
     testLoadParsesFillerChunk()
     testLoadRejectsBadInput()
+    testLoadRejectsNonRegularFiles()
     testRenderThenLoad()
 }
 
@@ -54,4 +55,24 @@ func testRenderThenLoad() {
     expect(renderVoiceFile(text: "This laptop is being stolen", to: path), "say renders a file")
     let n = loadVoiceSamples(wavPath: path).count
     expect(n >= 40_000 && n <= 120_000, "rendered voice length is plausible, got \(n) samples")
+}
+
+func testLoadRejectsNonRegularFiles() {
+    let wavPath = writeTemp(makeWav(samples: [0, 1000, -2000, 500], filler: 0))
+    let base = NSTemporaryDirectory() + "laptop-alarm-test-\(UUID().uuidString)"
+    let fifo = base + ".fifo", link = base + ".lnk", big = base + ".big"
+    defer { for p in [wavPath, fifo, link, big] { unlink(p) } }
+
+    expect(mkfifo(fifo, 0o600) == 0, "mkfifo works")
+    expect(loadVoiceSamples(wavPath: fifo).isEmpty, "FIFO is rejected without blocking")
+
+    expect(symlink(wavPath, link) == 0, "symlink works")
+    expect(loadVoiceSamples(wavPath: link).isEmpty, "symlink to a valid wav is rejected")
+
+    let fd = open(big, O_WRONLY | O_CREAT, 0o600)
+    expect(fd >= 0 && ftruncate(fd, 11 * 1024 * 1024) == 0, "sparse file created")
+    if fd >= 0 { close(fd) }
+    expect(loadVoiceSamples(wavPath: big).isEmpty, "file over the size cap is rejected")
+
+    expect(loadVoiceSamples(wavPath: wavPath).count == 4, "regular file still loads")
 }

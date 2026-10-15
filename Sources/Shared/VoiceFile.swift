@@ -1,8 +1,29 @@
 import Foundation
 
+let maxVoiceFileBytes = 10_000_000
+
+/// Reads a regular file through one descriptor, so the checks and the read see the same file.
+/// - Rejects symlinks, FIFOs, devices and anything over `maxBytes`. Never blocks on open.
+func readRegularFile(_ path: String, maxBytes: Int) -> Data? {
+    let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
+    guard fd >= 0 else { return nil }
+    defer { close(fd) }
+    var st = stat()
+    guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, Int(st.st_size) <= maxBytes else { return nil }
+    var data = Data()
+    var buf = [UInt8](repeating: 0, count: 65_536)
+    while true {
+        let n = read(fd, &buf, buf.count)
+        if n < 0 { return nil }
+        if n == 0 { return data }
+        data.append(contentsOf: buf[0..<n])
+        if data.count > maxBytes { return nil }
+    }
+}
+
 /// Mono 16-bit PCM WAV as peak-normalized samples. Empty if missing, malformed or silent.
 func loadVoiceSamples(wavPath: String) -> [Int16] {
-    guard let d = FileManager.default.contents(atPath: wavPath), d.count > 12 else { return [] }
+    guard let d = readRegularFile(wavPath, maxBytes: maxVoiceFileBytes), d.count > 12 else { return [] }
     var o = 12
     while o + 8 <= d.count {
         let id = String(decoding: d[o..<o + 4], as: UTF8.self)

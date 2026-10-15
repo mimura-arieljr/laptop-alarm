@@ -386,10 +386,6 @@ func verifyPassword(user: String, password: String) -> Bool {
 }
 
 func startDisarmPrompt(user: String, onSuccess: @escaping () -> Void) {
-    guard isatty(STDIN_FILENO) != 0 else {
-        note("No terminal for the password prompt. Disarm with: laptop-alarm disarm")
-        return
-    }
     Thread {
         while true {
             guard let p = getpass("Password to disarm: ") else { sleep(1); continue }
@@ -505,6 +501,12 @@ final class Alarm {
     }
 
     func start() {
+        // getpass reads /dev/tty, so a terminal-mode engine needs one. Refuse before any side effect.
+        if !headless {
+            let tty = open("/dev/tty", O_RDWR)
+            if tty < 0 { fail("No terminal for the password prompt. Run from a terminal, or use --headless.") }
+            close(tty)
+        }
         if headless { startControl() }
         if !headless { saveTerminal() }
         handleSignals { [weak self] sig in self?.onSignal(sig) }
