@@ -83,7 +83,7 @@ func decodeClientCommand(_ line: String) -> ClientCommand? {
     }
     guard line.hasPrefix("DISARM "),
         let data = Data(base64Encoded: String(line.dropFirst(7))),
-        let pw = String(data: data, encoding: .utf8)
+        let pw = String(validating: data, as: UTF8.self)
     else { return nil }
     return .disarm(password: pw)
 }

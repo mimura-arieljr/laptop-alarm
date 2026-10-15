@@ -25,13 +25,27 @@ func testStateLinesRoundTrip() {
 }
 
 func testPasswordSurvivesWire() {
-    let pw = "p@ss \"w\" \\ 'x'\n日本 🔐"
-    let line = encode(ClientCommand.disarm(password: pw))
-    expect(!line.contains("\n"), "disarm line has no raw newline")
-    expect(decodeClientCommand(line) == .disarm(password: pw), "password round trip")
+    let passwords = [
+        "p@ss \"w\" \\ 'x'\n日本 🔐",
+        "\u{FEFF}abc",
+        "e\u{301}",
+        "\u{E9}",
+    ]
+    for pw in passwords {
+        let line = encode(ClientCommand.disarm(password: pw))
+        expect(!line.contains("\n"), "disarm line has no raw newline")
+        if case .disarm(let got)? = decodeClientCommand(line) {
+            expect(Array(got.utf8) == Array(pw.utf8), "password bytes identical for \(Array(pw.utf8))")
+        } else {
+            expect(false, "disarm decodes for \(Array(pw.utf8))")
+        }
+    }
     for c in [ClientCommand.status, .cancel] {
         expect(decodeClientCommand(encode(c)) == c, "command round trip: \(c)")
     }
+    // Invalid UTF-8 inside valid base64 is rejected.
+    let bad = "DISARM " + Data([0xFF, 0xFE, 0x41]).base64EncodedString()
+    expect(decodeClientCommand(bad) == nil, "invalid UTF-8 password is nil")
 }
 
 func testGarbageDecodesToNil() {

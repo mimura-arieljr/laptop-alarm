@@ -27,6 +27,26 @@ private func withSockaddr<T>(_ addr: inout sockaddr_un, _ body: (UnsafePointer<s
     }
 }
 
+private func lookupUser(_ name: String) -> (uid_t, gid_t)? {
+    guard let pw = getpwnam(name) else { return nil }
+    return (pw.pointee.pw_uid, pw.pointee.pw_gid)
+}
+
+/// Hands the socket file to the app user.
+/// - Non-root: nothing to do.
+/// - Root: ownerUser must resolve and chown must succeed, else throw.
+func applySocketOwnership(
+    path: String, ownerUser: String?,
+    runningAsRoot: Bool = getuid() == 0,
+    lookup: (String) -> (uid_t, gid_t)? = lookupUser,
+    chown: (String, uid_t, gid_t) -> Int32 = { Darwin.chown($0, $1, $2) }
+) throws {
+    guard runningAsRoot else { return }
+    guard let user = ownerUser else { throw SocketError.cannotBind(EINVAL) }
+    guard let (uid, gid) = lookup(user) else { throw SocketError.cannotBind(ENOENT) }
+    guard chown(path, uid, gid) == 0 else { throw SocketError.cannotBind(errno) }
+}
+
 private func newSocketFD() -> Int32 {
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     if fd >= 0 {
@@ -127,8 +147,13 @@ final class LineSocketServer {
         bound = true
 
         chmod(path, 0o600)
-        if getuid() == 0, let user = ownerUser, let pw = getpwnam(user) {
-            chown(path, pw.pointee.pw_uid, pw.pointee.pw_gid)
+        do {
+            try applySocketOwnership(path: path, ownerUser: ownerUser)
+        } catch {
+            Darwin.close(fd)
+            unlink(path)
+            bound = false
+            throw error
         }
         guard listen(fd, 8) == 0 else {
             let e = errno
