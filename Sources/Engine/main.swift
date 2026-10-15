@@ -1,7 +1,7 @@
 // laptop-alarm.swift  (v1)
 // Anti-theft alarm for Apple Silicon MacBooks (built against an M5 Air).
 //
-// Build:   swiftc -O laptop-alarm.swift -o laptop-alarm
+// Build:   ./build.sh engine   (output build/laptop-alarm)
 //
 // Commands:
 //   sudo ./laptop-alarm monitor       Live sensor readout for verifying and tuning. Ctrl+C to exit.

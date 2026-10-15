@@ -7,10 +7,15 @@ A tool that sounds a loud alarm when someone lifts or tampers with my MacBook wh
 MacBook Air M5, 32 GB RAM, Apple Silicon. Recent macOS.
 
 ## Files
-- `Sources/Engine/main.swift`: v1 CLI. Build with `./build.sh engine` (output `build/laptop-alarm`).
-  Commands: `sudo ./build/laptop-alarm monitor | test-siren | push-setup | arm` with flags `--tilt --shock --lid --countdown --volume --user`.
-- `Sources/Shared/`: helpers shared by the engine and tests (`run`, invoking-user resolution, ntfy push topic and send).
-- `tests/`: plain test runner (`./build.sh test`, output `build/tests`). `./build.sh clean` removes `build/`.
+Build with `./build.sh engine | app | app-dev | install | test | bundle-check | clean`. Output goes to `build/`.
+- `Sources/Engine/`: the root alarm engine and CLI (`build/laptop-alarm`, from `./build.sh engine`).
+  Commands: `sudo ./build/laptop-alarm monitor | test-siren | push-setup | arm` with flags `--tilt --shock --lid --countdown --volume --user --headless --voice-file`.
+  Plus `./build/laptop-alarm status | disarm`, which need no sudo.
+- `Sources/App/`, `Sources/AppLogic/`: the menu bar app. `AppLogic` is the testable part (state, settings, elevation command building).
+- `Sources/Shared/`: code shared by the engine, the app and tests (control protocol and socket, `run`, invoking-user resolution, ntfy push, voice file, attempt limiter).
+- `tests/`: plain test runner (`./build.sh test`, output `build/tests`). `tests/bundle-check.sh` (`./build.sh bundle-check`) checks the built `.app` after `./build.sh app`.
+- `./build.sh app` builds `build/LaptopAlarm.app` (engine inside at `Contents/Resources/laptop-alarm`, ad-hoc signed). `./build.sh install` copies it to `/Applications` (override with `INSTALL_DIR`). `app-dev` builds only the bare app binary.
+- `scripts/spike-elevation.sh`: throwaway check of the administrator-prompt launch.
 - `sensor_probe.swift`, `sensor_probe_v2.swift`: one-time discovery probes. They are done and only kept for reference.
 
 ## Sensor findings (from probe runs on this machine)
@@ -30,7 +35,7 @@ Public APIs also confirmed working: the power source (`IOPSGetProvidingPowerSour
 
 Lesson learned: never compare individual bytes for signed values. Noise around zero flips bytes between 0x00 and 0xFF. Decode full int32 values instead.
 
-## v1 design (implemented, not yet compiled or tested)
+## Engine design
 - Arm flow: countdown, then 1 s calibration (baseline gravity vector, lid angle, AC state), then armed.
 - Triggers: tilt > 2° from baseline, or a change in |a| > 0.09 g (measured peaks: idle 0.2° / 0.001 g, table bump 0.6° / 0.066 g, gentle lift 7.3° / 0.131 g; low-pass filtered with EMA alpha 0.3, must hold for 5 samples at 50 Hz); lid angle change > 3° on 2 consecutive 10 Hz polls; lid closed; charger unplugged (only if armed while on AC).
 - When triggered: siren latches on (a square wave generated in memory, sweeping 700-1600 Hz, then a spoken "This laptop is being stolen" from macOS `say`, looped with AVAudioPlayer). The sound is built when the alarm starts, so firing never waits on `say`. If `say` fails, it falls back to the siren alone. Volume is forced to max and unmuted 10 times per second through CoreAudio / AudioHardwareService.
@@ -38,26 +43,39 @@ Lesson learned: never compare individual bytes for signed values. Noise around z
   - `sudo ./build/laptop-alarm push-setup` creates a random topic in `~/.laptop-alarm-ntfy-topic` (mode 0600) and sends a test push. Subscribe to that topic in the ntfy iPhone app.
   - The topic name is the only secret. Messages carry no location. Arming prints a warning if no topic is set up.
 - While armed: `pmset -a disablesleep 1`, so closing the lid cannot sleep the Mac.
-- Disarm: type the macOS password in Terminal. It is verified with OpenDirectory against `SUDO_USER`. Ctrl+C is ignored while armed. SIGTERM and SIGHUP clean up and exit.
+- Disarm: type the macOS password in Terminal. It is verified with OpenDirectory against the invoking user (the `--user` flag, else `SUDO_USER`). Ctrl+C is ignored while armed. SIGTERM and SIGHUP clean up and exit.
 - Cleanup restores volume, sleep setting, SPU driver properties, and the terminal's termios. If an original SPU value was unreadable, the accelerometer is put back to sleep.
 
+## Menu bar app
+- A lock icon in the menu bar (`LSUIElement`, no Dock icon, macOS 14+). Menu: status lines, Arm / Cancel / Disarm..., Sensitivity (low/normal/high), Siren volume (low/medium/full), Phone alerts window, Quit (disabled while armed). The two choices persist across launches.
+- Arm starts the engine through the macOS administrator prompt every time (`osascript ... with administrator privileges`), as `arm --headless --user <you> ...`. No stored credentials, no helper tool. Cancelling the prompt returns to disarmed.
+- The app renders the voice file itself, as the user, and hands it to the engine with `--voice-file`. `say` is silent under the admin-prompt launch, so the engine cannot render it.
+- The app finds the engine at `Bundle.main.resourceURL/laptop-alarm`.
+- Disarm in the app asks for the macOS password, which the engine verifies. Quitting and reopening while armed reconnects and shows armed.
+
+## Control socket
+- `/var/run/laptop-alarm.sock`, created by the headless engine, owned by the user (the invoking user), mode 0600. Line based, one command per line.
+- Client commands: `STATUS`, `CANCEL`, `DISARM <base64 password>`.
+- Engine replies: `STATE disarmed|countdown N|calibrating|armed|degraded <why>|triggered <why>`, `WARN <text>`, `OK`, `ERR <code>`. The engine sends the current state and warnings on connect, and pushes state changes to connected clients.
+- Failed password attempts are rate limited in the engine.
+
 ## Status / next steps
-1. Compile. The most likely error points are the OpenDirectory and AudioHardwareService calls.
-2. `sudo ./build/laptop-alarm monitor`: check Z is about -1 g when flat, then record peak tilt and shock for a table bump vs a gentle lift. Tune the thresholds from those numbers.
-3. `sudo ./build/laptop-alarm test-siren`: confirm a root process can read and set the volume and play audio.
-4. Arm, lock the screen, wait, unlock, disarm: confirm the sensors keep reporting while locked (a warning is logged if the accelerometer goes stale).
-5. Test each trigger individually.
+The engine, app, socket and bundle are built and unit-tested. Still to do is the owner's end-to-end run on `build/LaptopAlarm.app`: arm and cancel, the cancelled admin prompt, trigger with siren + voice + phone push, wrong and right disarm password, quit and reopen while armed, `kill -9` of the engine (the app shows the recovery message), and persistence of the Sensitivity and Siren choices.
 
 ## Known gotchas
 - Bluetooth headphones receive the siren instead of the built-in speakers. AirPods in range keep auto-reconnecting and flip the default output.
-- `say` run directly as root writes silence with no error. The voice is generated with `sudo -u $SUDO_USER say`, in a private temp dir owned by that user.
-- With the lid closed the siren plays but is inaudible, even at 100% volume (observed). It becomes audible when the lid opens. Accepted limit, so closed-lid theft needs the remote push (planned).
-- A crash or `kill -9` skips cleanup. Recover with `sudo pmset -a disablesleep 0`, and reboot to reset the sensor.
+- `say` run directly as root, or under the admin-prompt launch, writes silence with no error. From the app the voice file is rendered as the user and passed in with `--voice-file`. From a terminal the engine runs `sudo -u <invoking user> say` (the `--user` flag, else `SUDO_USER`), in a private temp dir owned by that user.
+- With the lid closed the siren plays but is inaudible, even at 100% volume (observed). It becomes audible when the lid opens. Accepted limit, so closed-lid theft relies on the phone push.
+- A crash or `kill -9` skips cleanup. Recovery, in order:
+  - `./build/laptop-alarm status` shows whether an engine is running. `./build/laptop-alarm disarm` disarms it (no sudo, but the password prompt needs a real Terminal).
+  - `sudo pkill -TERM laptop-alarm` stops a stuck engine and runs its cleanup.
+  - `sudo pmset -a disablesleep 0`, then reboot to reset the sensor.
+- Accepted risk: the root engine runs from a user-writable app bundle. A process running as my user could swap the engine binary before the next admin prompt. I accepted this to avoid a privileged helper.
 - Holding the power button for a hard shutdown defeats any software alarm. This is a deterrent, not real protection. Use Find My and Activation Lock for recovery.
 - `sudo` commands need my password interactively. Ask me to run them myself rather than trying to run them for me.
 
-## v2 ideas (deferred on purpose)
-A menu bar app with a privileged helper, disarming by Touch ID or screen unlock, forcing the built-in speakers, and a photo of whoever triggered the alarm.
+## Deferred on purpose
+Disarming by Touch ID or screen unlock, forcing the built-in speakers, and a photo of whoever triggered the alarm.
 
 ## How I like to work
 Be direct and skip preamble. Disagree when something seems off. Surface risks and tradeoffs on nontrivial choices, and say which alternatives you didn't pick and why. Separate what you know, what you infer, and what you guess. Fix problems at the root, not with one-off patches. Never use em dashes.
