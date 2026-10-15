@@ -11,6 +11,9 @@ func expect(_ condition: Bool, _ message: String) {
 
 runInvokingUserTests()
 runPushTests()
+runProtocolTests()
+runAttemptLimiterTests()
+runLineSocketTests()
 
 if failures > 0 {
     print("\(failures) failure(s)")
