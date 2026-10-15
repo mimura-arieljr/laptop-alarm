@@ -1,9 +1,10 @@
 // sensor_probe_v2.swift
 // Finds which SPU sensors actually change their VALUES when the laptop moves.
+// Use it on a Mac where Laptop Alarm shows the orange "degraded" state.
 //
-// Build:  swiftc -O sensor_probe_v2.swift -o probe
-// Run:    ./probe                 (listen only)
-//         sudo WAKE=1 ./probe     (also tries to wake sleeping SPU sensors, e.g. an IMU)
+// Build (from the repo root):  mkdir -p build && swiftc -O tools/sensor_probe_v2.swift -o build/probe
+// Run:    ./build/probe                 (listen only)
+//         sudo WAKE=1 ./build/probe     (also tries to wake sleeping SPU sensors, e.g. an IMU)
 //
 // The WAKE step writes undocumented properties to Apple's sensor driver.
 // Expected to reset on reboot. Skip it if you'd rather not.

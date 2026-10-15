@@ -26,6 +26,9 @@ check "engine binary is executable" test -x "$APP/Contents/Resources/laptop-alar
 check "LSUIElement is true" plist_is LSUIElement true
 check "CFBundleIdentifier" plist_is CFBundleIdentifier com.laptopalarm.LaptopAlarm
 check "LSMinimumSystemVersion is 14.0" plist_is LSMinimumSystemVersion 14.0
+check "CFBundleIconFile is AppIcon" plist_is CFBundleIconFile AppIcon
+check "AppIcon.icns exists" test -s "$APP/Contents/Resources/AppIcon.icns"
+check "AppIcon.icns is a Mac icon" bash -c "file '$APP/Contents/Resources/AppIcon.icns' | grep -q 'Mac OS X icon'"
 check "codesign verifies" codesign --verify --deep "$APP"
 
 if [ "$fails" -ne 0 ]; then

@@ -15,12 +15,21 @@ build_app_binary() {
     swiftc -O Sources/Shared/*.swift Sources/AppLogic/*.swift Sources/App/*.swift -framework AppKit -o "$1"
 }
 
+build_icon() {
+    mkdir -p build
+    swiftc -O tools/make-icon.swift -o build/make-icon
+    rm -rf build/AppIcon.iconset
+    ./build/make-icon build/AppIcon.iconset
+    iconutil -c icns build/AppIcon.iconset -o "$1"
+}
+
 build_bundle() {
     build_engine
     rm -rf "$APP"
     mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
     build_app_binary "$APP/Contents/MacOS/LaptopAlarm"
     cp build/laptop-alarm "$APP/Contents/Resources/laptop-alarm"
+    build_icon "$APP/Contents/Resources/AppIcon.icns"
     cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -28,6 +37,8 @@ build_bundle() {
 <dict>
     <key>CFBundleExecutable</key>
     <string>LaptopAlarm</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.laptopalarm.LaptopAlarm</string>
     <key>CFBundleName</key>
