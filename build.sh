@@ -10,7 +10,7 @@ engine)
     ;;
 test)
     mkdir -p build
-    swiftc Sources/Shared/*.swift tests/*.swift -o build/tests
+    swiftc Sources/Shared/*.swift Sources/AppLogic/*.swift tests/*.swift -o build/tests
     ./build/tests
     ;;
 clean)

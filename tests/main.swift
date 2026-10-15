@@ -14,6 +14,9 @@ runPushTests()
 runProtocolTests()
 runAttemptLimiterTests()
 runLineSocketTests()
+runSettingsTests()
+runAppStateTests()
+runElevationTests()
 
 if failures > 0 {
     print("\(failures) failure(s)")
