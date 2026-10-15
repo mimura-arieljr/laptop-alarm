@@ -45,6 +45,7 @@ struct Config {
     var sirenVolume: Float32 = 1.0    // system volume forced while the alarm sounds
     var sustainSamples = 5            // consecutive over-threshold samples (5 at 50 Hz = 100 ms)
     var reportIntervalMicros = 20_000 // 50 Hz
+    var voiceFile: String?            // WAV rendered by the app as the user; `say` is silent under the admin prompt
 }
 
 // MARK: - Utilities
@@ -296,39 +297,14 @@ func makeVoiceSamples(_ text: String, rate: Int = 44_100) -> [Int16] {
                                              attributes: [.posixPermissions: 0o700])
     if let user { run("/usr/sbin/chown", [user, dir]) }
     let path = dir + "/voice.wav"
-    let sayArgs = ["-o", path, "--file-format=WAVE", "--data-format=LEI16@\(rate)", text]
+    let sayArgs = sayArguments(text: text, to: path, rate: rate)
     let out = user.map { run("/usr/bin/sudo", ["-u", $0, "/usr/bin/say"] + sayArgs) }
         ?? run("/usr/bin/say", sayArgs)
-    guard let d = FileManager.default.contents(atPath: path), d.count > 12 else {
-        note("say wrote no file at \(path). Output: \(out.isEmpty ? "(none)" : out)")
-        return []
+    let samples = loadVoiceSamples(wavPath: path)
+    if samples.isEmpty {
+        note("say produced no usable audio at \(path). Output: \(out.isEmpty ? "(none)" : out)")
     }
-    var o = 12
-    var seen: [String] = []
-    while o + 8 <= d.count {
-        let id = String(decoding: d[o..<o + 4], as: UTF8.self)
-        seen.append(id)
-        let size = Int(d[o + 4]) | Int(d[o + 5]) << 8 | Int(d[o + 6]) << 16 | Int(d[o + 7]) << 24
-        if id == "data" {
-            let end = min(d.count, o + 8 + size) - 1
-            var s: [Int16] = []
-            var i = o + 8
-            while i < end {
-                s.append(Int16(bitPattern: UInt16(d[i]) | UInt16(d[i + 1]) << 8))
-                i += 2
-            }
-            let peak = s.map { abs(Int($0)) }.max() ?? 0
-            guard peak > 0 else {
-                note("say wrote silence (\(s.count) samples, file \(d.count) bytes). Output: \(out.isEmpty ? "(none)" : out)")
-                return []
-            }
-            let gain = 0.9 * Double(Int16.max) / Double(peak)
-            return s.map { Int16(Double($0) * gain) }
-        }
-        o += 8 + size + (size & 1)
-    }
-    note("say file has no data chunk (\(d.count) bytes, chunks: \(seen)). Output: \(out.isEmpty ? "(none)" : out)")
-    return []
+    return samples
 }
 
 /// Siren sweeping 700-1600 Hz for 2 s, then the voice warning. Generated in memory, no sound files needed.
@@ -359,12 +335,19 @@ func makeSirenWAV(voice: [Int16] = [], seconds: Double = 2.0, rate: Int = 44_100
 final class Siren {
     private var player: AVAudioPlayer?
     private var wav: Data?
+    private let voiceFile: String?
+
+    init(voiceFile: String? = nil) { self.voiceFile = voiceFile }
     var duration: TimeInterval { player?.duration ?? 0 }
 
     /// Builds the sound ahead of time so the alarm never waits on `say` when it fires.
     func prepare() -> Data {
         if let wav { return wav }
-        let voice = makeVoiceSamples("This laptop is being stolen")
+        var voice = voiceFile.map { loadVoiceSamples(wavPath: $0) } ?? []
+        if voice.isEmpty && voiceFile != nil {
+            note("WARNING: voice file unusable (\(voiceFile ?? "")). Falling back to say.")
+        }
+        if voice.isEmpty { voice = makeVoiceSamples("This laptop is being stolen") }
         if voice.isEmpty { note("WARNING: voice warning unavailable (say failed). Siren only.") }
         let data = makeSirenWAV(voice: voice)
         wav = data
@@ -403,10 +386,15 @@ func verifyPassword(user: String, password: String) -> Bool {
 }
 
 func startDisarmPrompt(user: String, onSuccess: @escaping () -> Void) {
+    guard isatty(STDIN_FILENO) != 0 else {
+        note("No terminal for the password prompt. Disarm with: laptop-alarm disarm")
+        return
+    }
     Thread {
         while true {
             guard let p = getpass("Password to disarm: ") else { sleep(1); continue }
             let pw = String(cString: p)
+            if pw.isEmpty { continue }
             if verifyPassword(user: user, password: pw) {
                 DispatchQueue.main.async(execute: onSuccess)
                 return
@@ -462,7 +450,7 @@ final class Alarm {
 
     let waker = SPUWaker()
     let accel = Accelerometer()
-    let siren = Siren()
+    let siren: Siren
     let pushTopic: String?
     var lidSensor: IOHIDDevice?
 
@@ -486,6 +474,7 @@ final class Alarm {
         self.config = config
         self.user = user
         self.headless = headless
+        self.siren = Siren(voiceFile: config.voiceFile)
         self.pushTopic = loadPushTopic(user: user)
     }
 
@@ -674,11 +663,13 @@ final class Alarm {
             note("Ctrl+C is ignored while armed. Type your password to disarm.")
             return
         }
+        guard state != .exiting else { return }
+        state = .exiting
         siren.stop()
         cleanup()
         note(sig == SIGINT ? "Cancelled before arming." : "Stopped by signal \(sig). Settings restored.")
-        control?.stop()
-        exit(0)
+        publish(.disarmed)
+        exitSoon()
     }
 
     func cleanup() {
@@ -758,7 +749,7 @@ func usage() -> Never {
       sudo ./laptop-alarm test-siren
       sudo ./laptop-alarm push-setup
       (any command also accepts --user NAME to override SUDO_USER)
-      sudo ./laptop-alarm arm         [--tilt N] [--shock G] [--lid N] [--countdown S] [--volume V] [--headless]
+      sudo ./laptop-alarm arm         [--tilt N] [--shock G] [--lid N] [--countdown S] [--volume V] [--headless] [--voice-file PATH]
       ./laptop-alarm status           (no sudo) show the running alarm's state
       ./laptop-alarm disarm           (no sudo) disarm a running alarm with your password
     """)
@@ -785,6 +776,7 @@ while i < args.count {
     case "--lid": config.lidDegrees = Double(value) ?? config.lidDegrees
     case "--countdown": config.countdown = max(3, Int(value) ?? config.countdown)
     case "--volume": config.sirenVolume = min(1, max(0, Float32(value) ?? config.sirenVolume))
+    case "--voice-file": config.voiceFile = value.isEmpty ? nil : value
     case "--user": break  // consumed by resolveInvokingUser
     default: fail("Unknown option: \(args[i])")
     }

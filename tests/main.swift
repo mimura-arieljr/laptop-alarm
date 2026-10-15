@@ -18,6 +18,7 @@ runSettingsTests()
 runAppStateTests()
 runElevationTests()
 runControlLogicTests()
+runVoiceFileTests()
 
 if failures > 0 {
     print("\(failures) failure(s)")

@@ -35,12 +35,19 @@ as_escape() {
 cd "$REPO"
 ./build.sh engine
 
-SHELL_CMD="$(sh_quote "$ENGINE") arm --user $(sh_quote "$USER_NAME") --countdown 5 --volume 0.2 > $(sh_quote "$LOG") 2>&1 &"
+# Render the voice as the user: `say` is silent under the administrator prompt.
+VOICE_DIR="$(mktemp -d)"
+VOICE_FILE="$VOICE_DIR/voice.wav"
+/usr/bin/say -o "$VOICE_FILE" --file-format=WAVE --data-format=LEI16@44100 "This laptop is being stolen"
+[[ -s "$VOICE_FILE" ]] || die "say wrote no voice file at $VOICE_FILE"
+
+SHELL_CMD="$(sh_quote "$ENGINE") arm --headless --user $(sh_quote "$USER_NAME") --voice-file $(sh_quote "$VOICE_FILE") --countdown 5 --volume 0.2 > $(sh_quote "$LOG") 2>&1 &"
 APPLE_SCRIPT="do shell script \"$(as_escape "$SHELL_CMD")\" with administrator privileges"
 
 if [[ "${SPIKE_DRY_RUN:-}" == "1" ]]; then
   echo "DRY RUN, would run:"
   echo "osascript -e $(sh_quote "$APPLE_SCRIPT")"
+  rm -rf "$VOICE_DIR"
   exit 0
 fi
 
@@ -59,6 +66,7 @@ Checks (report pass or fail for each):
   4. A push arrives on the phone.
   5. sudo pkill -TERM laptop-alarm restores volume and sleep
      (pmset -g | grep SleepDisabled shows 0).
+  6. ./build/laptop-alarm status prints the armed state.
 
 Stop the engine:  sudo pkill -TERM laptop-alarm
 Recovery:         sudo pmset -a disablesleep 0
