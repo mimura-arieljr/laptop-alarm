@@ -30,7 +30,7 @@ Lesson learned: never compare individual bytes for signed values. Noise around z
 
 ## v1 design (implemented, not yet compiled or tested)
 - Arm flow: countdown, then 1 s calibration (baseline gravity vector, lid angle, AC state), then armed.
-- Triggers: tilt > 5° from baseline, or a change in |a| > 0.05 g (low-pass filtered with EMA alpha 0.3, must hold for 5 samples at 50 Hz); lid angle change > 3° on 2 consecutive 10 Hz polls; lid closed; charger unplugged (only if armed while on AC).
+- Triggers: tilt > 2° from baseline, or a change in |a| > 0.09 g (measured peaks: idle 0.2° / 0.001 g, table bump 0.6° / 0.066 g, gentle lift 7.3° / 0.131 g; low-pass filtered with EMA alpha 0.3, must hold for 5 samples at 50 Hz); lid angle change > 3° on 2 consecutive 10 Hz polls; lid closed; charger unplugged (only if armed while on AC).
 - When triggered: siren latches on (a square wave generated in memory, sweeping 700-1600 Hz, played with AVAudioPlayer). Volume is forced to max and unmuted 10 times per second through CoreAudio / AudioHardwareService.
 - While armed: `pmset -a disablesleep 1`, so closing the lid cannot sleep the Mac.
 - Disarm: type the macOS password in Terminal. It is verified with OpenDirectory against `SUDO_USER`. Ctrl+C is ignored while armed. SIGTERM and SIGHUP clean up and exit.

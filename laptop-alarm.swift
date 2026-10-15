@@ -9,8 +9,8 @@
 //   sudo ./laptop-alarm arm           Countdown, calibrate, then arm. Disarm by typing your macOS password.
 //
 // Tuning flags (arm and monitor):
-//   --tilt <degrees>   tilt from resting position that triggers      (default 5)
-//   --shock <g>        change in total force that triggers           (default 0.05)
+//   --tilt <degrees>   tilt from resting position that triggers      (default 2)
+//   --shock <g>        change in total force that triggers           (default 0.09)
 //   --lid <degrees>    lid hinge movement that triggers              (default 3)
 //   --countdown <s>    seconds before arming                         (default 10)
 //
@@ -36,8 +36,8 @@ import OpenDirectory
 // MARK: - Config
 
 struct Config {
-    var tiltDegrees = 5.0
-    var shockG = 0.05
+    var tiltDegrees = 2.0             // measured: idle 0.2, table bump 0.6, gentle lift 7.3
+    var shockG = 0.09                 // measured: idle 0.001, table bump 0.066, gentle lift 0.131
     var lidDegrees = 3.0
     var countdown = 10
     var sustainSamples = 5            // consecutive over-threshold samples (5 at 50 Hz = 100 ms)
