@@ -13,6 +13,7 @@
 //   --shock <g>        change in total force that triggers           (default 0.09)
 //   --lid <degrees>    lid hinge movement that triggers              (default 3)
 //   --countdown <s>    seconds before arming                         (default 10)
+//   --volume <0-1>     system volume forced when the alarm fires     (default 1, use 0.1 to test)
 //
 // Triggers while armed: motion (tilt or lift), lid angle change, lid closed,
 // charger unplugged (only if armed while plugged in).
@@ -40,6 +41,7 @@ struct Config {
     var shockG = 0.09                 // measured: idle 0.001, table bump 0.066, gentle lift 0.131
     var lidDegrees = 3.0
     var countdown = 10
+    var sirenVolume: Float32 = 1.0    // system volume forced while the alarm sounds
     var sustainSamples = 5            // consecutive over-threshold samples (5 at 50 Hz = 100 ms)
     var reportIntervalMicros = 20_000 // 50 Hz
 }
@@ -511,7 +513,7 @@ final class Alarm {
                 note("WARNING: accelerometer stopped reporting. Motion trigger may be inactive.")
             }
         case .triggered:
-            setVolume(1.0, muted: 0)
+            setVolume(config.sirenVolume, muted: 0)
         default:
             break
         }
@@ -521,7 +523,7 @@ final class Alarm {
         guard state == .armed else { return }
         state = .triggered
         note("ALARM TRIGGERED: \(reason)")
-        setVolume(1.0, muted: 0)
+        setVolume(config.sirenVolume, muted: 0)
         siren.start()
     }
 
@@ -619,7 +621,7 @@ func usage() -> Never {
     Usage:
       sudo ./laptop-alarm monitor      [--tilt N] [--shock G]
       sudo ./laptop-alarm test-siren
-      sudo ./laptop-alarm arm          [--tilt N] [--shock G] [--lid N] [--countdown S]
+      sudo ./laptop-alarm arm          [--tilt N] [--shock G] [--lid N] [--countdown S] [--volume V]
     """)
     exit(0)
 }
@@ -636,6 +638,7 @@ while i < args.count {
     case "--shock": config.shockG = Double(value) ?? config.shockG
     case "--lid": config.lidDegrees = Double(value) ?? config.lidDegrees
     case "--countdown": config.countdown = max(3, Int(value) ?? config.countdown)
+    case "--volume": config.sirenVolume = min(1, max(0, Float32(value) ?? config.sirenVolume))
     default: fail("Unknown option: \(args[i])")
     }
     i += 2

@@ -8,7 +8,7 @@ MacBook Air M5, 32 GB RAM, Apple Silicon. Recent macOS.
 
 ## Files
 - `laptop-alarm.swift`: v1 CLI. Build with `swiftc -O laptop-alarm.swift -o laptop-alarm`.
-  Commands: `sudo ./laptop-alarm monitor | test-siren | arm` with flags `--tilt --shock --lid --countdown`.
+  Commands: `sudo ./laptop-alarm monitor | test-siren | arm` with flags `--tilt --shock --lid --countdown --volume`.
 - `sensor_probe.swift`, `sensor_probe_v2.swift`: one-time discovery probes. They are done and only kept for reference.
 
 ## Sensor findings (from probe runs on this machine)
