@@ -51,7 +51,7 @@ Lesson learned: never compare individual bytes for signed values. Noise around z
 - Arm starts the engine through the macOS administrator prompt every time (`osascript ... with administrator privileges`), as `arm --headless --user <you> ...`. No stored credentials, no helper tool. Cancelling the prompt returns to disarmed.
 - The app renders the voice file itself, as the user, and hands it to the engine with `--voice-file`. `say` is silent under the admin-prompt launch, so the engine cannot render it.
 - The app finds the engine at `Bundle.main.resourceURL/laptop-alarm`.
-- Disarm in the app asks for the macOS password, which the engine verifies. Quitting and reopening while armed reconnects and shows armed.
+- Disarm in the app asks for the macOS password, which the engine verifies. Quitting and reopening while armed is meant to reconnect and show armed (intended, not yet verified end to end).
 
 ## Control socket
 - `/var/run/laptop-alarm.sock`, created by the headless engine, owned by the user (the invoking user), mode 0600. Line based, one command per line.
@@ -61,6 +61,9 @@ Lesson learned: never compare individual bytes for signed values. Noise around z
 
 ## Status / next steps
 The engine, app, socket and bundle are built and unit-tested. Still to do is the owner's end-to-end run on `build/LaptopAlarm.app`: arm and cancel, the cancelled admin prompt, trigger with siren + voice + phone push, wrong and right disarm password, quit and reopen while armed, `kill -9` of the engine (the app shows the recovery message), and persistence of the Sensitivity and Siren choices.
+
+- Locked screen: the owner armed, locked the screen, waited, unlocked and disarmed on 2026-10-15. The sensors kept reporting while locked.
+- Triggers verified so far by the owner: tilt/shock (motion) and lid closed. Still unverified individually: lid angle change, charger unplug, shock without tilt.
 
 ## Known gotchas
 - Bluetooth headphones receive the siren instead of the built-in speakers. AirPods in range keep auto-reconnecting and flip the default output.

@@ -1,6 +1,6 @@
 import AppKit
 
-final class StatusItemController: NSObject {
+final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let menu = NSMenu()
     private let client = LineSocketClient(path: controlSocketPath)
@@ -14,7 +14,9 @@ final class StatusItemController: NSObject {
     private var flashTimer: Timer?
     private var flashOn = true
     private var promptOpen = false
-    private var awaitingDisarm = false
+    private var awaitingDisarm = false {
+        didSet { if awaitingDisarm != oldValue { render() } }
+    }
 
     private let phoneAlerts = PhoneAlertsWindowController()
     private let statusWidth = 44
@@ -25,10 +27,14 @@ final class StatusItemController: NSObject {
         enginePath = StatusItemController.locateEngine()
         super.init()
         menu.autoenablesItems = false
+        menu.delegate = self
         statusItem.menu = menu
         removeStaleVoiceDirectories()
         client.onLine = { [weak self] line in self?.handle(line) }
-        client.onClose = { [weak self] in self?.apply(.connectionClosed) }
+        client.onClose = { [weak self] in
+            self?.awaitingDisarm = false
+            self?.apply(.connectionClosed)
+        }
         phoneAlerts.onTopicCreated = { [weak self] in self?.render() }
         // A running engine greets with its state, which replaces this one.
         try? client.connect()
@@ -43,12 +49,24 @@ final class StatusItemController: NSObject {
         state = reduce(state, event)
         if state == .disarmed && old != .disarmed { warnings.clear() }
         render()
+        if state == .lost && old != .lost { tryReconnect() }
+    }
+
+    /// One attempt. A failure changes nothing, a success is followed by the engine's greeting.
+    private func tryReconnect() {
+        try? client.connect()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        if state == .lost { tryReconnect() }
     }
 
     private func handle(_ line: String) {
         guard let message = decodeEngineMessage(line) else { return }
         switch message {
         case .state:
+            // Safe only because the engine's accept source runs on its main queue.
+            // - That queue is busy in Alarm.start() until siren.prepare() has read the file.
             removeVoiceDirectory()
             apply(.engine(message))
         case .warning(let text):
@@ -62,6 +80,10 @@ final class StatusItemController: NSObject {
     }
 
     private func handleError(_ code: String) {
+        if code == "not-cancellable" {
+            DispatchQueue.main.async { showMessage("Already armed. Use Disarm.") }
+            return
+        }
         guard awaitingDisarm else { return }
         awaitingDisarm = false
         switch code {
@@ -81,6 +103,9 @@ final class StatusItemController: NSObject {
 
     @objc private func arm() {
         guard presentation(for: state).armEnabled else { return }
+        // Drop any old connection first, or its events would move us out of .launching.
+        client.close()
+        stopConnectRetries()
         apply(.armTapped)
         guard let enginePath else {
             apply(.elevation(.failed("Alarm engine not found.")))
@@ -114,7 +139,6 @@ final class StatusItemController: NSObject {
         let deadline = Date().addingTimeInterval(10)
         let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] t in
             guard let self else { return t.invalidate() }
-            guard self.state == .launching else { return self.stopConnectRetries() }
             do {
                 try self.client.connect()
                 self.stopConnectRetries()
@@ -282,7 +306,9 @@ final class StatusItemController: NSObject {
         if p.cancelVisible {
             menu.addItem(actionItem("Cancel", #selector(cancel)))
         } else if p.disarmVisible {
-            menu.addItem(actionItem("Disarm...", #selector(disarm)))
+            let disarmItem = actionItem("Disarm...", #selector(disarm))
+            disarmItem.isEnabled = !awaitingDisarm
+            menu.addItem(disarmItem)
         } else {
             let arm = actionItem("Arm", #selector(arm))
             arm.isEnabled = p.armEnabled

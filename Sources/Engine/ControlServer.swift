@@ -2,7 +2,7 @@ import Foundation
 
 /// Serves the control socket for headless mode.
 /// - One limiter for the whole process, so reconnecting never resets the backoff.
-/// - Everything runs on the main queue.
+/// - Everything runs on the main queue except password verification, which runs on a global queue.
 final class ControlServer {
     private let server: LineSocketServer
     private weak var alarm: Alarm?

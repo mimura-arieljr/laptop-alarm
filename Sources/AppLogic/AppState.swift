@@ -47,7 +47,8 @@ func reduce(_ s: AppState, _ e: AppEvent) -> AppState {
     case .connectionClosed:
         switch s {
         case .armed, .armedDegraded, .triggered, .lost: return .lost
-        case .launching, .countdown, .calibrating: return .disarmed
+        // A clean exit sends STATE disarmed first, so a close here is abnormal.
+        case .launching, .countdown, .calibrating: return .failed("The alarm engine stopped before arming.")
         case .disarmed, .failed: return s
         }
     case .connectTimedOut:
@@ -96,7 +97,7 @@ func presentation(for s: AppState) -> MenuPresentation {
         return make("ALARM: \(reason)", icon: "bell.fill", tint: .red, flashing: true, disarm: true)
     case .lost:
         return make(
-            "Lost contact with the engine. If the Mac will not sleep, run: sudo pmset -a disablesleep 0",
+            "Lost contact with the engine. Quit and reopen the app to reconnect. If the Mac will not sleep, run: sudo pmset -a disablesleep 0",
             icon: "exclamationmark.triangle", tint: .orange, quit: true)
     }
 }

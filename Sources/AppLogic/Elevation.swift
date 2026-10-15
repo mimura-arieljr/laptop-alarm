@@ -9,7 +9,8 @@ enum ElevationResult: Equatable {
 func interpretOsascript(status: Int32, stderr: String) -> ElevationResult {
     if status == 0 { return .started }
     if stderr.contains("User canceled. (-128)") { return .cancelled }
-    return .failed(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+    let message = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    return .failed(message.isEmpty ? "osascript exited with status \(status)" : message)
 }
 
 /// POSIX single quoting. Inside '...' only the quote itself is special.

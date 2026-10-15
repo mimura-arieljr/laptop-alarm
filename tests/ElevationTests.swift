@@ -37,6 +37,9 @@ func testInterpretOsascript() {
     expect(
         interpretOsascript(status: 1, stderr: "  some failure \n") == .failed("some failure"),
         "other stderr is failed and trimmed")
+    expect(
+        interpretOsascript(status: 3, stderr: " \n") == .failed("osascript exited with status 3"),
+        "empty stderr names the status")
 }
 
 /// Runs `printf %s <quoted>` in /bin/sh and returns stdout, or nil on a launch failure.

@@ -1,13 +1,13 @@
-// laptop-alarm.swift  (v1)
+// laptop-alarm engine
 // Anti-theft alarm for Apple Silicon MacBooks (built against an M5 Air).
 //
 // Build:   ./build.sh engine   (output build/laptop-alarm)
 //
 // Commands:
-//   sudo ./laptop-alarm monitor       Live sensor readout for verifying and tuning. Ctrl+C to exit.
-//   sudo ./laptop-alarm test-siren    Plays the siren once at your CURRENT volume.
-//   sudo ./laptop-alarm push-setup    Creates the private ntfy topic and sends a test push to your phone.
-//   sudo ./laptop-alarm arm           Countdown, calibrate, then arm. Disarm by typing your macOS password.
+//   sudo ./build/laptop-alarm monitor       Live sensor readout for verifying and tuning. Ctrl+C to exit.
+//   sudo ./build/laptop-alarm test-siren    Plays the siren once at your CURRENT volume.
+//   sudo ./build/laptop-alarm push-setup    Creates the private ntfy topic and sends a test push to your phone.
+//   sudo ./build/laptop-alarm arm           Countdown, calibrate, then arm. Disarm by typing your macOS password.
 //
 // Tuning flags (arm and monitor):
 //   --tilt <degrees>   tilt from resting position that triggers      (default 2)
@@ -520,8 +520,12 @@ final class Alarm {
         lidSensor = openLidSensor()
         if lidSensor == nil { warn("Lid angle sensor not available. Lid-angle trigger disabled.") }
 
+        // The control server accepts on main, which stays blocked here until prepare() has read the voice file.
         _ = siren.prepare()
-        if pushTopic == nil { warn("Push not set up. Run: sudo ./laptop-alarm push-setup") }
+        if pushTopic == nil {
+            warn("Phone alerts not set up.")
+            note("To set up: sudo ./build/laptop-alarm push-setup")
+        }
         savedVolume = getVolume()
         sleepWasDisabled = isSleepDisabled()
 

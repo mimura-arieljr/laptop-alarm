@@ -4,6 +4,7 @@ func runAppStateTests() {
     testReduceHappyPath()
     testCancelledDialogReturnsToDisarmed()
     testLostConnectionWhileArmedIsLost()
+    testCancelFlowEndsDisarmed()
     testDegradedState()
     testIgnoredEvents()
     testPresentation()
@@ -38,10 +39,18 @@ func testLostConnectionWhileArmedIsLost() {
         expect(reduce(s, .connectionClosed) == .lost, "connection closed while \(s) is lost")
     }
     for s in [AppState.launching, .countdown(3), .calibrating] {
-        expect(reduce(s, .connectionClosed) == .disarmed, "connection closed while \(s) is disarmed")
+        expect(
+            reduce(s, .connectionClosed) == .failed("The alarm engine stopped before arming."),
+            "connection closed while \(s) is a failure")
     }
     expect(reduce(.lost, .connectionClosed) == .lost, "lost stays lost")
+    expect(reduce(.failed("x"), .connectionClosed) == .failed("x"), "failed stays failed")
     expect(reduce(.disarmed, .engine(.state(.armed))) == .armed, "relaunch into running engine")
+}
+
+func testCancelFlowEndsDisarmed() {
+    let end = run(.countdown(5), [.engine(.state(.disarmed)), .connectionClosed])
+    expect(end == .disarmed, "cancel (STATE disarmed then close) ends disarmed, not failed")
 }
 
 func testDegradedState() {
@@ -90,6 +99,8 @@ func testPresentation() {
     let l = presentation(for: .lost)
     expect(l.statusText.contains("sudo pmset -a disablesleep 0"), "lost text has recovery command")
     expect(l.quitEnabled, "lost can quit")
+    expect(l.statusText.contains("Quit and reopen the app to reconnect."), "lost text says how to reconnect")
+    expect(!l.armEnabled, "lost cannot arm")
 
     let f = presentation(for: .failed("boom"))
     expect(f.statusText.contains("boom") && f.armEnabled && f.quitEnabled, "failed flags")
