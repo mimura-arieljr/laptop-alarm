@@ -73,6 +73,9 @@ func testPresentation() {
     expect(c.statusText == "Arming in 7 s", "countdown text")
     expect(c.cancelVisible && !c.quitEnabled && !c.armEnabled, "countdown flags")
 
+    let cal = presentation(for: .calibrating)
+    expect(cal.cancelVisible && !cal.quitEnabled && !cal.armEnabled, "calibrating shows cancel")
+
     let a = presentation(for: .armed)
     expect(a.tint == .red && a.disarmVisible && !a.quitEnabled, "armed flags")
 

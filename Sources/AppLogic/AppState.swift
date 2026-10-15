@@ -87,7 +87,7 @@ func presentation(for s: AppState) -> MenuPresentation {
     case .countdown(let n):
         return make("Arming in \(n) s", icon: "lock", cancel: true)
     case .calibrating:
-        return make("Calibrating", icon: "lock")
+        return make("Calibrating", icon: "lock", cancel: true)
     case .armed:
         return make("Armed", icon: "lock.fill", tint: .red, disarm: true)
     case .armedDegraded(let reason):
