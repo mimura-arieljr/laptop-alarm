@@ -4,10 +4,24 @@
 # - SPIKE_DRY_RUN=1 prints the osascript command instead of running it.
 set -euo pipefail
 
+die() { echo "spike-elevation: $*" >&2; exit 1; }
+
+# Args: effective uid, resolved user name.
+check_not_root() {
+  [[ "$1" -ne 0 ]] ||
+    die "do NOT run this script with sudo. Run it as your own user; the macOS administrator dialog asks for your password itself."
+  [[ -n "$2" && "$2" != "root" ]] ||
+    die "resolved user is '$2', expected your normal account. Run as your own user, not root."
+}
+
+USER_NAME="${USER:-$(id -un)}"
+# Test hook, only honored in dry-run mode.
+[[ "${SPIKE_DRY_RUN:-}" == "1" && -n "${SPIKE_FORCE_USER:-}" ]] && USER_NAME="$SPIKE_FORCE_USER"
+check_not_root "$EUID" "$USER_NAME"
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENGINE="$REPO/build/laptop-alarm"
 LOG="/tmp/laptop-alarm-spike.log"
-USER_NAME="${USER:-$(id -un)}"
 
 # Wrap in single quotes for the shell; escape embedded single quotes.
 sh_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
