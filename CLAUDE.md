@@ -31,7 +31,7 @@ Lesson learned: never compare individual bytes for signed values. Noise around z
 ## v1 design (implemented, not yet compiled or tested)
 - Arm flow: countdown, then 1 s calibration (baseline gravity vector, lid angle, AC state), then armed.
 - Triggers: tilt > 2° from baseline, or a change in |a| > 0.09 g (measured peaks: idle 0.2° / 0.001 g, table bump 0.6° / 0.066 g, gentle lift 7.3° / 0.131 g; low-pass filtered with EMA alpha 0.3, must hold for 5 samples at 50 Hz); lid angle change > 3° on 2 consecutive 10 Hz polls; lid closed; charger unplugged (only if armed while on AC).
-- When triggered: siren latches on (a square wave generated in memory, sweeping 700-1600 Hz, played with AVAudioPlayer). Volume is forced to max and unmuted 10 times per second through CoreAudio / AudioHardwareService.
+- When triggered: siren latches on (a square wave generated in memory, sweeping 700-1600 Hz, then a spoken "This laptop is being stolen" from macOS `say`, looped with AVAudioPlayer). The sound is built when the alarm starts, so firing never waits on `say`. If `say` fails, it falls back to the siren alone. Volume is forced to max and unmuted 10 times per second through CoreAudio / AudioHardwareService.
 - While armed: `pmset -a disablesleep 1`, so closing the lid cannot sleep the Mac.
 - Disarm: type the macOS password in Terminal. It is verified with OpenDirectory against `SUDO_USER`. Ctrl+C is ignored while armed. SIGTERM and SIGHUP clean up and exit.
 - Cleanup restores volume, sleep setting, SPU driver properties, and the terminal's termios. If an original SPU value was unreadable, the accelerometer is put back to sleep.
@@ -44,7 +44,9 @@ Lesson learned: never compare individual bytes for signed values. Noise around z
 5. Test each trigger individually.
 
 ## Known gotchas
-- Bluetooth headphones receive the siren instead of the built-in speakers.
+- Bluetooth headphones receive the siren instead of the built-in speakers. AirPods in range keep auto-reconnecting and flip the default output.
+- `say` run directly as root writes silence with no error. The voice is generated with `sudo -u $SUDO_USER say`, in a private temp dir owned by that user.
+- With the lid closed the siren plays but is inaudible, even at 100% volume (observed). It becomes audible when the lid opens. Accepted limit, so closed-lid theft needs the remote push (planned).
 - A crash or `kill -9` skips cleanup. Recover with `sudo pmset -a disablesleep 0`, and reboot to reset the sensor.
 - Holding the power button for a hard shutdown defeats any software alarm. This is a deterrent, not real protection. Use Find My and Activation Lock for recovery.
 - `sudo` commands need my password interactively. Ask me to run them myself rather than trying to run them for me.

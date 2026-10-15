@@ -296,8 +296,53 @@ func setVolume(_ volume: Float32, muted: UInt32) {
     _ = AudioObjectSetPropertyData(dev, &va, 0, nil, UInt32(MemoryLayout<Float32>.size), &v)
 }
 
-/// 2-second square-wave siren sweeping 700-1600 Hz. Generated in memory, no sound files needed.
-func makeSirenWAV(seconds: Double = 2.0, rate: Int = 44_100) -> Data {
+/// Spoken text from macOS `say` as mono Int16 samples, peak-normalized. Empty if `say` fails.
+func makeVoiceSamples(_ text: String, rate: Int = 44_100) -> [Int16] {
+    // Root's `say` writes silence, so run it as the sudo user in a private temp dir they own.
+    let user = ProcessInfo.processInfo.environment["SUDO_USER"].flatMap { $0 == "root" ? nil : $0 }
+    let dir = "/tmp/laptop-alarm-\(UUID().uuidString)"
+    defer { try? FileManager.default.removeItem(atPath: dir) }
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: false,
+                                             attributes: [.posixPermissions: 0o700])
+    if let user { run("/usr/sbin/chown", [user, dir]) }
+    let path = dir + "/voice.wav"
+    let sayArgs = ["-o", path, "--file-format=WAVE", "--data-format=LEI16@\(rate)", text]
+    let out = user.map { run("/usr/bin/sudo", ["-u", $0, "/usr/bin/say"] + sayArgs) }
+        ?? run("/usr/bin/say", sayArgs)
+    guard let d = FileManager.default.contents(atPath: path), d.count > 12 else {
+        note("say wrote no file at \(path). Output: \(out.isEmpty ? "(none)" : out)")
+        return []
+    }
+    var o = 12
+    var seen: [String] = []
+    while o + 8 <= d.count {
+        let id = String(decoding: d[o..<o + 4], as: UTF8.self)
+        seen.append(id)
+        let size = Int(d[o + 4]) | Int(d[o + 5]) << 8 | Int(d[o + 6]) << 16 | Int(d[o + 7]) << 24
+        if id == "data" {
+            let end = min(d.count, o + 8 + size) - 1
+            var s: [Int16] = []
+            var i = o + 8
+            while i < end {
+                s.append(Int16(bitPattern: UInt16(d[i]) | UInt16(d[i + 1]) << 8))
+                i += 2
+            }
+            let peak = s.map { abs(Int($0)) }.max() ?? 0
+            guard peak > 0 else {
+                note("say wrote silence (\(s.count) samples, file \(d.count) bytes). Output: \(out.isEmpty ? "(none)" : out)")
+                return []
+            }
+            let gain = 0.9 * Double(Int16.max) / Double(peak)
+            return s.map { Int16(Double($0) * gain) }
+        }
+        o += 8 + size + (size & 1)
+    }
+    note("say file has no data chunk (\(d.count) bytes, chunks: \(seen)). Output: \(out.isEmpty ? "(none)" : out)")
+    return []
+}
+
+/// Siren sweeping 700-1600 Hz for 2 s, then the voice warning. Generated in memory, no sound files needed.
+func makeSirenWAV(voice: [Int16] = [], seconds: Double = 2.0, rate: Int = 44_100) -> Data {
     let n = Int(seconds * Double(rate))
     var samples = [Int16](repeating: 0, count: n)
     var phase = 0.0
@@ -308,23 +353,38 @@ func makeSirenWAV(seconds: Double = 2.0, rate: Int = 44_100) -> Data {
         phase += 2 * Double.pi * (700 + 900 * tri) / Double(rate)
         samples[i] = Int16((sin(phase) >= 0 ? 0.9 : -0.9) * Double(Int16.max))
     }
+    if !voice.isEmpty { samples += [Int16](repeating: 0, count: rate / 5) + voice + [Int16](repeating: 0, count: rate / 5) }
+    let total = samples.count
     var d = Data()
     func ascii(_ s: String) { d.append(s.data(using: .ascii)!) }
     func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
     func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
-    ascii("RIFF"); u32(UInt32(36 + n * 2)); ascii("WAVE")
+    ascii("RIFF"); u32(UInt32(36 + total * 2)); ascii("WAVE")
     ascii("fmt "); u32(16); u16(1); u16(1); u32(UInt32(rate)); u32(UInt32(rate * 2)); u16(2); u16(16)
-    ascii("data"); u32(UInt32(n * 2))
+    ascii("data"); u32(UInt32(total * 2))
     samples.withUnsafeBytes { d.append(contentsOf: $0) }
     return d
 }
 
 final class Siren {
     private var player: AVAudioPlayer?
+    private var wav: Data?
+    var duration: TimeInterval { player?.duration ?? 0 }
+
+    /// Builds the sound ahead of time so the alarm never waits on `say` when it fires.
+    func prepare() -> Data {
+        if let wav { return wav }
+        let voice = makeVoiceSamples("This laptop is being stolen")
+        if voice.isEmpty { note("WARNING: voice warning unavailable (say failed). Siren only.") }
+        let data = makeSirenWAV(voice: voice)
+        wav = data
+        return data
+    }
+
     @discardableResult
     func start(loops: Int = -1) -> Bool {
         do {
-            let p = try AVAudioPlayer(data: makeSirenWAV())
+            let p = try AVAudioPlayer(data: prepare())
             p.numberOfLoops = loops
             p.volume = 1.0
             p.prepareToPlay()
@@ -427,6 +487,7 @@ final class Alarm {
         lidSensor = openLidSensor()
         if lidSensor == nil { note("WARNING: lid angle sensor not available. Lid-angle trigger disabled.") }
 
+        _ = siren.prepare()
         savedVolume = getVolume()
         sleepWasDisabled = isSleepDisabled()
 
@@ -661,8 +722,8 @@ case "test-siren":
     }
     let s = Siren()
     keepAlive = s
-    print(s.start(loops: 0) ? "Playing siren for 2 seconds at current volume..." : "Siren failed.")
-    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { s.stop(); exit(0) }
+    print(s.start(loops: 0) ? String(format: "Playing siren once (%.1f s) at current volume...", s.duration) : "Siren failed.")
+    DispatchQueue.main.asyncAfter(deadline: .now() + s.duration + 0.5) { s.stop(); exit(0) }
 case "arm":
     guard let user = ProcessInfo.processInfo.environment["SUDO_USER"], user != "root" else {
         fail("Run via sudo from your own account so the disarm password can be checked against your user.")
