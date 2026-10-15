@@ -61,19 +61,8 @@ func fail(_ s: String) -> Never {
     exit(1)
 }
 
-@discardableResult
-func run(_ path: String, _ args: [String]) -> String {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: path)
-    p.arguments = args
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = pipe
-    do { try p.run() } catch { return "" }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
-    return String(data: data, encoding: .utf8) ?? ""
-}
+/// The human account behind sudo. Set once at startup, before anything reads it.
+var invokingUser: String?
 
 func length(_ v: SIMD3<Double>) -> Double { (v * v).sum().squareRoot() }
 
@@ -300,7 +289,7 @@ func setVolume(_ volume: Float32, muted: UInt32) {
 /// Spoken text from macOS `say` as mono Int16 samples, peak-normalized. Empty if `say` fails.
 func makeVoiceSamples(_ text: String, rate: Int = 44_100) -> [Int16] {
     // Root's `say` writes silence, so run it as the sudo user in a private temp dir they own.
-    let user = ProcessInfo.processInfo.environment["SUDO_USER"].flatMap { $0 == "root" ? nil : $0 }
+    let user = invokingUser
     let dir = "/tmp/laptop-alarm-\(UUID().uuidString)"
     defer { try? FileManager.default.removeItem(atPath: dir) }
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: false,
@@ -429,40 +418,6 @@ func startDisarmPrompt(user: String, onSuccess: @escaping () -> Void) {
 
 // MARK: - Push (ntfy)
 
-let ntfyServer = "https://ntfy.sh"
-
-/// The topic name is the only secret, so it is random and stored in a 0600 file in the sudo user's home.
-func pushTopicPath() -> String? {
-    guard let user = ProcessInfo.processInfo.environment["SUDO_USER"], user != "root",
-          let home = NSHomeDirectoryForUser(user) else { return nil }
-    return home + "/.laptop-alarm-ntfy-topic"
-}
-
-func loadPushTopic() -> String? {
-    guard let path = pushTopicPath(), let s = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
-    let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-    return t.isEmpty ? nil : t
-}
-
-func createPushTopic() -> String? {
-    guard let path = pushTopicPath(), let user = ProcessInfo.processInfo.environment["SUDO_USER"] else { return nil }
-    let chars = Array("abcdefghijklmnopqrstuvwxyz0123456789")
-    var rng = SystemRandomNumberGenerator()
-    let topic = "laptop-alarm-" + String((0..<24).map { _ in chars.randomElement(using: &rng)! })
-    guard (try? topic.write(toFile: path, atomically: true, encoding: .utf8)) != nil else { return nil }
-    chmod(path, 0o600)
-    run("/usr/sbin/chown", [user, path])
-    return topic
-}
-
-/// True on HTTP 200.
-func sendPush(topic: String, title: String, message: String) -> Bool {
-    let out = run("/usr/bin/curl", ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}",
-                                    "-H", "Title: \(title)", "-H", "Priority: urgent", "-H", "Tags: rotating_light",
-                                    "-d", message, "\(ntfyServer)/\(topic)"])
-    return out.hasSuffix("200")
-}
-
 /// Sends in the background so a bad connection never delays the siren. Retries 5 times.
 func sendPushAsync(topic: String, title: String, message: String) {
     DispatchQueue.global().async {
@@ -499,7 +454,7 @@ final class Alarm {
     let waker = SPUWaker()
     let accel = Accelerometer()
     let siren = Siren()
-    let pushTopic = loadPushTopic()
+    let pushTopic: String?
     var lidSensor: IOHIDDevice?
 
     var filtered: SIMD3<Double>?
@@ -521,6 +476,7 @@ final class Alarm {
     init(config: Config, user: String) {
         self.config = config
         self.user = user
+        self.pushTopic = loadPushTopic(user: user)
     }
 
     func start() {
@@ -734,12 +690,14 @@ func usage() -> Never {
       sudo ./laptop-alarm monitor      [--tilt N] [--shock G]
       sudo ./laptop-alarm test-siren
       sudo ./laptop-alarm push-setup
+      (any command also accepts --user NAME to override SUDO_USER)
       sudo ./laptop-alarm arm         [--tilt N] [--shock G] [--lid N] [--countdown S] [--volume V]
     """)
     exit(0)
 }
 
 let args = Array(CommandLine.arguments.dropFirst())
+invokingUser = resolveInvokingUser(arguments: args, environment: ProcessInfo.processInfo.environment)
 guard let command = args.first else { usage() }
 
 var config = Config()
@@ -752,6 +710,7 @@ while i < args.count {
     case "--lid": config.lidDegrees = Double(value) ?? config.lidDegrees
     case "--countdown": config.countdown = max(3, Int(value) ?? config.countdown)
     case "--volume": config.sirenVolume = min(1, max(0, Float32(value) ?? config.sirenVolume))
+    case "--user": break  // consumed by resolveInvokingUser
     default: fail("Unknown option: \(args[i])")
     }
     i += 2
@@ -777,9 +736,13 @@ case "test-siren":
     print(s.start(loops: 0) ? String(format: "Playing siren once (%.1f s) at current volume...", s.duration) : "Siren failed.")
     DispatchQueue.main.asyncAfter(deadline: .now() + s.duration + 0.5) { s.stop(); exit(0) }
 case "push-setup":
-    guard pushTopicPath() != nil else { fail("Run via sudo from your own account so the topic file goes in your home.") }
-    let fresh = loadPushTopic() == nil
-    guard let topic = loadPushTopic() ?? createPushTopic() else { fail("Could not write \(pushTopicPath() ?? "the topic file").") }
+    guard let user = invokingUser, let topicPath = pushTopicPath(user: user) else {
+        fail("Run via sudo from your own account so the topic file goes in your home.")
+    }
+    let fresh = loadPushTopic(user: user) == nil
+    guard let topic = loadPushTopic(user: user) ?? createPushTopic(user: user) else {
+        fail("Could not write \(topicPath).")
+    }
     print("\(fresh ? "Created" : "Using existing") topic: \(topic)")
     print("In the ntfy app: tap +, enter this topic name, and keep the default server (ntfy.sh).")
     print("Sending a test message...")
@@ -787,7 +750,7 @@ case "push-setup":
     print(ok ? "Sent. Check your phone." : "Send failed. Check the network.")
     exit(ok ? 0 : 1)
 case "arm":
-    guard let user = ProcessInfo.processInfo.environment["SUDO_USER"], user != "root" else {
+    guard let user = invokingUser else {
         fail("Run via sudo from your own account so the disarm password can be checked against your user.")
     }
     let a = Alarm(config: config, user: user)

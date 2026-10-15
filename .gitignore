@@ -1,3 +1,5 @@
 laptop-alarm
 docs/superpowers/
 .superpowers/
+build/
+LaptopAlarm.app/

@@ -7,8 +7,10 @@ A tool that sounds a loud alarm when someone lifts or tampers with my MacBook wh
 MacBook Air M5, 32 GB RAM, Apple Silicon. Recent macOS.
 
 ## Files
-- `laptop-alarm.swift`: v1 CLI. Build with `swiftc -O laptop-alarm.swift -o laptop-alarm`.
-  Commands: `sudo ./laptop-alarm monitor | test-siren | push-setup | arm` with flags `--tilt --shock --lid --countdown --volume`.
+- `Sources/Engine/main.swift`: v1 CLI. Build with `./build.sh engine` (output `build/laptop-alarm`).
+  Commands: `sudo ./build/laptop-alarm monitor | test-siren | push-setup | arm` with flags `--tilt --shock --lid --countdown --volume --user`.
+- `Sources/Shared/`: helpers shared by the engine and tests (`run`, invoking-user resolution, ntfy push topic and send).
+- `tests/`: plain test runner (`./build.sh test`, output `build/tests`). `./build.sh clean` removes `build/`.
 - `sensor_probe.swift`, `sensor_probe_v2.swift`: one-time discovery probes. They are done and only kept for reference.
 
 ## Sensor findings (from probe runs on this machine)
@@ -33,7 +35,7 @@ Lesson learned: never compare individual bytes for signed values. Noise around z
 - Triggers: tilt > 2° from baseline, or a change in |a| > 0.09 g (measured peaks: idle 0.2° / 0.001 g, table bump 0.6° / 0.066 g, gentle lift 7.3° / 0.131 g; low-pass filtered with EMA alpha 0.3, must hold for 5 samples at 50 Hz); lid angle change > 3° on 2 consecutive 10 Hz polls; lid closed; charger unplugged (only if armed while on AC).
 - When triggered: siren latches on (a square wave generated in memory, sweeping 700-1600 Hz, then a spoken "This laptop is being stolen" from macOS `say`, looped with AVAudioPlayer). The sound is built when the alarm starts, so firing never waits on `say`. If `say` fails, it falls back to the siren alone. Volume is forced to max and unmuted 10 times per second through CoreAudio / AudioHardwareService.
 - Push: on trigger, one ntfy.sh message (title "Laptop alarm triggered", body = the reason) is sent from a background thread, 5 tries, 3 s apart, so it never delays the siren.
-  - `sudo ./laptop-alarm push-setup` creates a random topic in `~/.laptop-alarm-ntfy-topic` (mode 0600) and sends a test push. Subscribe to that topic in the ntfy iPhone app.
+  - `sudo ./build/laptop-alarm push-setup` creates a random topic in `~/.laptop-alarm-ntfy-topic` (mode 0600) and sends a test push. Subscribe to that topic in the ntfy iPhone app.
   - The topic name is the only secret. Messages carry no location. Arming prints a warning if no topic is set up.
 - While armed: `pmset -a disablesleep 1`, so closing the lid cannot sleep the Mac.
 - Disarm: type the macOS password in Terminal. It is verified with OpenDirectory against `SUDO_USER`. Ctrl+C is ignored while armed. SIGTERM and SIGHUP clean up and exit.
@@ -41,8 +43,8 @@ Lesson learned: never compare individual bytes for signed values. Noise around z
 
 ## Status / next steps
 1. Compile. The most likely error points are the OpenDirectory and AudioHardwareService calls.
-2. `sudo ./laptop-alarm monitor`: check Z is about -1 g when flat, then record peak tilt and shock for a table bump vs a gentle lift. Tune the thresholds from those numbers.
-3. `sudo ./laptop-alarm test-siren`: confirm a root process can read and set the volume and play audio.
+2. `sudo ./build/laptop-alarm monitor`: check Z is about -1 g when flat, then record peak tilt and shock for a table bump vs a gentle lift. Tune the thresholds from those numbers.
+3. `sudo ./build/laptop-alarm test-siren`: confirm a root process can read and set the volume and play audio.
 4. Arm, lock the screen, wait, unlock, disarm: confirm the sensors keep reporting while locked (a warning is logged if the accelerometer goes stale).
 5. Test each trigger individually.
 
