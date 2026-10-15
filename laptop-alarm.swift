@@ -6,6 +6,7 @@
 // Commands:
 //   sudo ./laptop-alarm monitor       Live sensor readout for verifying and tuning. Ctrl+C to exit.
 //   sudo ./laptop-alarm test-siren    Plays the siren once at your CURRENT volume.
+//   sudo ./laptop-alarm push-setup    Creates the private ntfy topic and sends a test push to your phone.
 //   sudo ./laptop-alarm arm           Countdown, calibrate, then arm. Disarm by typing your macOS password.
 //
 // Tuning flags (arm and monitor):
@@ -426,6 +427,53 @@ func startDisarmPrompt(user: String, onSuccess: @escaping () -> Void) {
     }.start()
 }
 
+// MARK: - Push (ntfy)
+
+let ntfyServer = "https://ntfy.sh"
+
+/// The topic name is the only secret, so it is random and stored in a 0600 file in the sudo user's home.
+func pushTopicPath() -> String? {
+    guard let user = ProcessInfo.processInfo.environment["SUDO_USER"], user != "root",
+          let home = NSHomeDirectoryForUser(user) else { return nil }
+    return home + "/.laptop-alarm-ntfy-topic"
+}
+
+func loadPushTopic() -> String? {
+    guard let path = pushTopicPath(), let s = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+    let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    return t.isEmpty ? nil : t
+}
+
+func createPushTopic() -> String? {
+    guard let path = pushTopicPath(), let user = ProcessInfo.processInfo.environment["SUDO_USER"] else { return nil }
+    let chars = Array("abcdefghijklmnopqrstuvwxyz0123456789")
+    var rng = SystemRandomNumberGenerator()
+    let topic = "laptop-alarm-" + String((0..<24).map { _ in chars.randomElement(using: &rng)! })
+    guard (try? topic.write(toFile: path, atomically: true, encoding: .utf8)) != nil else { return nil }
+    chmod(path, 0o600)
+    run("/usr/sbin/chown", [user, path])
+    return topic
+}
+
+/// True on HTTP 200.
+func sendPush(topic: String, title: String, message: String) -> Bool {
+    let out = run("/usr/bin/curl", ["-sS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}",
+                                    "-H", "Title: \(title)", "-H", "Priority: urgent", "-H", "Tags: rotating_light",
+                                    "-d", message, "\(ntfyServer)/\(topic)"])
+    return out.hasSuffix("200")
+}
+
+/// Sends in the background so a bad connection never delays the siren. Retries 5 times.
+func sendPushAsync(topic: String, title: String, message: String) {
+    DispatchQueue.global().async {
+        for _ in 1...5 {
+            if sendPush(topic: topic, title: title, message: message) { note("Push sent."); return }
+            sleep(3)
+        }
+        note("WARNING: push failed after 5 attempts.")
+    }
+}
+
 // MARK: - Signals
 
 var signalSources: [DispatchSourceSignal] = []
@@ -451,6 +499,7 @@ final class Alarm {
     let waker = SPUWaker()
     let accel = Accelerometer()
     let siren = Siren()
+    let pushTopic = loadPushTopic()
     var lidSensor: IOHIDDevice?
 
     var filtered: SIMD3<Double>?
@@ -488,6 +537,7 @@ final class Alarm {
         if lidSensor == nil { note("WARNING: lid angle sensor not available. Lid-angle trigger disabled.") }
 
         _ = siren.prepare()
+        if pushTopic == nil { note("WARNING: push not set up. Run: sudo ./laptop-alarm push-setup") }
         savedVolume = getVolume()
         sleepWasDisabled = isSleepDisabled()
 
@@ -586,6 +636,7 @@ final class Alarm {
         note("ALARM TRIGGERED: \(reason)")
         setVolume(config.sirenVolume, muted: 0)
         siren.start()
+        if let t = pushTopic { sendPushAsync(topic: t, title: "Laptop alarm triggered", message: reason) }
     }
 
     func disarm() {
@@ -682,7 +733,8 @@ func usage() -> Never {
     Usage:
       sudo ./laptop-alarm monitor      [--tilt N] [--shock G]
       sudo ./laptop-alarm test-siren
-      sudo ./laptop-alarm arm          [--tilt N] [--shock G] [--lid N] [--countdown S] [--volume V]
+      sudo ./laptop-alarm push-setup
+      sudo ./laptop-alarm arm         [--tilt N] [--shock G] [--lid N] [--countdown S] [--volume V]
     """)
     exit(0)
 }
@@ -724,6 +776,16 @@ case "test-siren":
     keepAlive = s
     print(s.start(loops: 0) ? String(format: "Playing siren once (%.1f s) at current volume...", s.duration) : "Siren failed.")
     DispatchQueue.main.asyncAfter(deadline: .now() + s.duration + 0.5) { s.stop(); exit(0) }
+case "push-setup":
+    guard pushTopicPath() != nil else { fail("Run via sudo from your own account so the topic file goes in your home.") }
+    let fresh = loadPushTopic() == nil
+    guard let topic = loadPushTopic() ?? createPushTopic() else { fail("Could not write \(pushTopicPath() ?? "the topic file").") }
+    print("\(fresh ? "Created" : "Using existing") topic: \(topic)")
+    print("In the ntfy app: tap +, enter this topic name, and keep the default server (ntfy.sh).")
+    print("Sending a test message...")
+    let ok = sendPush(topic: topic, title: "Laptop alarm test", message: "Push is working.")
+    print(ok ? "Sent. Check your phone." : "Send failed. Check the network.")
+    exit(ok ? 0 : 1)
 case "arm":
     guard let user = ProcessInfo.processInfo.environment["SUDO_USER"], user != "root" else {
         fail("Run via sudo from your own account so the disarm password can be checked against your user.")
