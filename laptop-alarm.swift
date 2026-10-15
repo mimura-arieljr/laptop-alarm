@@ -276,7 +276,7 @@ func getVolume() -> (volume: Float32, muted: UInt32)? {
     var va = volumeAddress()
     var v: Float32 = 0
     var vs = UInt32(MemoryLayout<Float32>.size)
-    guard AudioHardwareServiceGetPropertyData(dev, &va, 0, nil, &vs, &v) == noErr else { return nil }
+    guard AudioObjectGetPropertyData(dev, &va, 0, nil, &vs, &v) == noErr else { return nil }
     var ma = muteAddress()
     var m: UInt32 = 0
     var ms = UInt32(MemoryLayout<UInt32>.size)
@@ -291,7 +291,7 @@ func setVolume(_ volume: Float32, muted: UInt32) {
     _ = AudioObjectSetPropertyData(dev, &ma, 0, nil, UInt32(MemoryLayout<UInt32>.size), &m)
     var va = volumeAddress()
     var v = volume
-    _ = AudioHardwareServiceSetPropertyData(dev, &va, 0, nil, UInt32(MemoryLayout<Float32>.size), &v)
+    _ = AudioObjectSetPropertyData(dev, &va, 0, nil, UInt32(MemoryLayout<Float32>.size), &v)
 }
 
 /// 2-second square-wave siren sweeping 700-1600 Hz. Generated in memory, no sound files needed.
