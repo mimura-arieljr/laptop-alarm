@@ -445,11 +445,20 @@ func handleSignals(_ handler: @escaping (Int32) -> Void) {
 // MARK: - Alarm
 
 final class Alarm {
-    enum State { case starting, countingDown, calibrating, armed, triggered }
+    enum State { case starting, countingDown, calibrating, armed, triggered, exiting }
+
+    static let degradedMessage = "Motion sensor not working. Lid and charger triggers only."
 
     let config: Config
     let user: String
+    let headless: Bool
     var state = State.starting
+
+    // Published state for control clients. Never `.disarmed` until the engine is about to exit.
+    private(set) var current = AlarmState.countdown(0)
+    private(set) var warnings: [String] = []
+    var degradedReason: String?
+    var control: ControlServer?
 
     let waker = SPUWaker()
     let accel = Accelerometer()
@@ -473,27 +482,55 @@ final class Alarm {
     var cleanedUp = false
     var ticker: Timer?
 
-    init(config: Config, user: String) {
+    init(config: Config, user: String, headless: Bool) {
         self.config = config
         self.user = user
+        self.headless = headless
         self.pushTopic = loadPushTopic(user: user)
     }
 
+    func publish(_ s: AlarmState) {
+        current = s
+        control?.broadcast(encode(.state(s)))
+    }
+
+    func warn(_ text: String) {
+        note("WARNING: \(text)")
+        warnings.append(text)
+        control?.broadcast(encode(.warning(text)))
+    }
+
+    /// Runs before any side effect.
+    /// - A second engine must exit here without cleanup, which would undo the first engine's state.
+    private func startControl() {
+        let c = ControlServer(alarm: self, ownerUser: user)
+        do {
+            try c.start()
+        } catch SocketError.alreadyRunning {
+            fail("An alarm is already running.")
+        } catch {
+            fail("Cannot start the control socket: \(error)")
+        }
+        control = c
+        publish(.countdown(config.countdown))
+    }
+
     func start() {
-        saveTerminal()
+        if headless { startControl() }
+        if !headless { saveTerminal() }
         handleSignals { [weak self] sig in self?.onSignal(sig) }
 
         let woken = waker.wake(intervalMicros: config.reportIntervalMicros)
         note("Sensor drivers woken: \(woken)" + (waker.targeted ? " (accelerometer only)" : " (could not isolate accelerometer, woke all)"))
 
         accel.onSample = { [weak self] v in self?.onAccel(v) }
-        if !accel.start(intervalMicros: config.reportIntervalMicros) { note("WARNING: accelerometer not available. Motion trigger disabled.") }
+        if !accel.start(intervalMicros: config.reportIntervalMicros) { warn("Accelerometer not available. Motion trigger disabled.") }
 
         lidSensor = openLidSensor()
-        if lidSensor == nil { note("WARNING: lid angle sensor not available. Lid-angle trigger disabled.") }
+        if lidSensor == nil { warn("Lid angle sensor not available. Lid-angle trigger disabled.") }
 
         _ = siren.prepare()
-        if pushTopic == nil { note("WARNING: push not set up. Run: sudo ./laptop-alarm push-setup") }
+        if pushTopic == nil { warn("Push not set up. Run: sudo ./laptop-alarm push-setup") }
         savedVolume = getVolume()
         sleepWasDisabled = isSleepDisabled()
 
@@ -501,15 +538,18 @@ final class Alarm {
 
         state = .countingDown
         var remaining = config.countdown
+        publish(.countdown(remaining))
         note("Arming in \(remaining)s. Leave the laptop still, then lock the screen (Ctrl+Cmd+Q). Ctrl+C to cancel.")
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
             guard let self, self.state == .countingDown else { t.invalidate(); return }
             remaining -= 1
             if remaining > 0 {
+                self.publish(.countdown(remaining))
                 if remaining <= 3 { note("\(remaining)...") }
             } else {
                 t.invalidate()
                 self.state = .calibrating
+                self.publish(.calibrating)
                 self.calibration.removeAll()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self.finishArming() }
             }
@@ -517,10 +557,12 @@ final class Alarm {
     }
 
     func finishArming() {
+        guard state == .calibrating else { return }
         if calibration.count >= 10 {
             baseline = calibration.reduce(SIMD3<Double>(repeating: 0), +) / Double(calibration.count)
         } else {
             note("WARNING: no accelerometer data during calibration. Motion trigger disabled.")
+            degradedReason = Alarm.degradedMessage
         }
         baseLid = lidSensor.flatMap(readLidAngle)
         baseAC = onACPower()
@@ -535,8 +577,9 @@ final class Alarm {
         active.append(baseAC ? "charger unplugged" : "charger unplugged: OFF (armed on battery)")
 
         state = .armed
+        publish(degradedReason.map { .degraded($0) } ?? .armed)
         note("ARMED. Triggers: " + active.joined(separator: "; "))
-        startDisarmPrompt(user: user) { [weak self] in self?.disarm() }
+        if !headless { startDisarmPrompt(user: user) { [weak self] in self?.disarm() } }
     }
 
     func onAccel(_ v: SIMD3<Double>) {
@@ -578,6 +621,8 @@ final class Alarm {
             if baseline != nil && !warnedStale && Date().timeIntervalSince(accel.lastSample) > 2 {
                 warnedStale = true
                 note("WARNING: accelerometer stopped reporting. Motion trigger may be inactive.")
+                degradedReason = Alarm.degradedMessage
+                publish(.degraded(Alarm.degradedMessage))
             }
         case .triggered:
             setVolume(config.sirenVolume, muted: 0)
@@ -589,6 +634,7 @@ final class Alarm {
     func trigger(_ reason: String) {
         guard state == .armed else { return }
         state = .triggered
+        publish(.triggered(reason))
         note("ALARM TRIGGERED: \(reason)")
         setVolume(config.sirenVolume, muted: 0)
         siren.start()
@@ -597,10 +643,30 @@ final class Alarm {
 
     func disarm() {
         let wasTriggered = state == .triggered
+        state = .exiting
         siren.stop()
         cleanup()
         note(wasTriggered ? "Disarmed after alarm." : "Disarmed. No alarm was triggered.")
-        exit(0)
+        publish(.disarmed)
+        exitSoon()
+    }
+
+    /// Only reachable from the control server, which checks the state first.
+    func cancelFromClient() {
+        state = .exiting
+        cleanup()
+        note("Cancelled before arming.")
+        publish(.disarmed)
+        exitSoon()
+    }
+
+    /// Gives the last lines a moment to reach the clients before the socket goes away.
+    private func exitSoon() {
+        guard let control else { exit(0) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            control.stop()
+            exit(0)
+        }
     }
 
     func onSignal(_ sig: Int32) {
@@ -611,6 +677,7 @@ final class Alarm {
         siren.stop()
         cleanup()
         note(sig == SIGINT ? "Cancelled before arming." : "Stopped by signal \(sig). Settings restored.")
+        control?.stop()
         exit(0)
     }
 
@@ -691,7 +758,9 @@ func usage() -> Never {
       sudo ./laptop-alarm test-siren
       sudo ./laptop-alarm push-setup
       (any command also accepts --user NAME to override SUDO_USER)
-      sudo ./laptop-alarm arm         [--tilt N] [--shock G] [--lid N] [--countdown S] [--volume V]
+      sudo ./laptop-alarm arm         [--tilt N] [--shock G] [--lid N] [--countdown S] [--volume V] [--headless]
+      ./laptop-alarm status           (no sudo) show the running alarm's state
+      ./laptop-alarm disarm           (no sudo) disarm a running alarm with your password
     """)
     exit(0)
 }
@@ -701,8 +770,14 @@ invokingUser = resolveInvokingUser(arguments: args, environment: ProcessInfo.pro
 guard let command = args.first else { usage() }
 
 var config = Config()
+var headless = false
 var i = 1
 while i < args.count {
+    if args[i] == "--headless" {
+        headless = true
+        i += 1
+        continue
+    }
     let value = i + 1 < args.count ? args[i + 1] : ""
     switch args[i] {
     case "--tilt": config.tiltDegrees = Double(value) ?? config.tiltDegrees
@@ -716,7 +791,8 @@ while i < args.count {
     i += 2
 }
 
-if geteuid() != 0 { fail("Run with sudo. Waking the accelerometer and blocking sleep need root.") }
+let needsRoot = command != "status" && command != "disarm"
+if needsRoot && geteuid() != 0 { fail("Run with sudo. Waking the accelerometer and blocking sleep need root.") }
 
 var keepAlive: AnyObject?
 
@@ -753,9 +829,13 @@ case "arm":
     guard let user = invokingUser else {
         fail("Run via sudo from your own account so the disarm password can be checked against your user.")
     }
-    let a = Alarm(config: config, user: user)
+    let a = Alarm(config: config, user: user, headless: headless)
     keepAlive = a
     a.start()
+case "status":
+    startStatusCommand()
+case "disarm":
+    startDisarmCommand()
 default:
     usage()
 }
