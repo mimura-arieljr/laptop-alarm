@@ -16,6 +16,7 @@ final class StatusItemController: NSObject {
     private var promptOpen = false
     private var awaitingDisarm = false
 
+    private let phoneAlerts = PhoneAlertsWindowController()
     private let statusWidth = 44
     private let spokenWarning = "This laptop is being stolen"
 
@@ -28,6 +29,7 @@ final class StatusItemController: NSObject {
         removeStaleVoiceDirectories()
         client.onLine = { [weak self] line in self?.handle(line) }
         client.onClose = { [weak self] in self?.apply(.connectionClosed) }
+        phoneAlerts.onTopicCreated = { [weak self] in self?.render() }
         // A running engine greets with its state, which replaces this one.
         try? client.connect()
         if enginePath == nil { state = .failed("Alarm engine not found.") }
@@ -155,8 +157,9 @@ final class StatusItemController: NSObject {
         NSPasteboard.general.setString("sudo pmset -a disablesleep 0", forType: .string)
     }
 
-    // Task 7 fills this in.
-    @objc private func openPhoneAlerts() {}
+    @objc private func openPhoneAlerts() {
+        phoneAlerts.show()
+    }
 
     @objc private func pickSensitivity(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let value = Sensitivity(rawValue: raw) else { return }
@@ -288,7 +291,8 @@ final class StatusItemController: NSObject {
         menu.addItem(.separator())
         menu.addItem(submenuItem("Sensitivity", Sensitivity.allCases, current: settings.sensitivity, #selector(pickSensitivity)))
         menu.addItem(submenuItem("Siren volume", SirenLevel.allCases, current: settings.siren, #selector(pickSiren)))
-        menu.addItem(actionItem("Phone alerts...", #selector(openPhoneAlerts)))
+        let phoneTitle = loadPushTopic(user: NSUserName()) != nil ? "Phone alerts: set up" : "Phone alerts: not set up"
+        menu.addItem(actionItem(phoneTitle, #selector(openPhoneAlerts)))
         menu.addItem(.separator())
         let quit = actionItem("Quit", #selector(quit))
         quit.isEnabled = p.quitEnabled
