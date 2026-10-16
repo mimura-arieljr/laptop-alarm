@@ -15,6 +15,7 @@ Build with `./build.sh engine | app | app-dev | install | test | bundle-check | 
 - `Sources/Shared/`: code shared by the engine, the app and tests (control protocol and socket, `run`, invoking-user resolution, ntfy push, voice file, attempt limiter).
 - `tests/`: plain test runner (`./build.sh test`, output `build/tests`). `tests/bundle-check.sh` (`./build.sh bundle-check`) checks the built `.app` after `./build.sh app`.
 - `./build.sh app` builds `build/LaptopAlarm.app` (engine inside at `Contents/Resources/laptop-alarm`, ad-hoc signed). `./build.sh install` copies it to `/Applications` (override with `INSTALL_DIR`). `app-dev` builds only the bare app binary.
+- `docs/TECHNICAL.md`: the full technical documentation. `docs/diagrams/*.svg` are its three diagrams (architecture, sequence, states), exported from the editable sources in `docs/diagrams/src/*.html`. Edit the HTML, then re-export the SVG with the diagram-design skill's `scripts/export_svg.py <html> <svg> --system-fonts`. Keep TECHNICAL.md in step with the code when behavior changes.
 - `tools/make-icon.swift`: draws the app icon with CoreGraphics (a laptop with a red siren light and a shield on the screen). `./build.sh app` compiles it, writes an iconset, and packs `AppIcon.icns` into the bundle with `iconutil`. There is no image file in git. The menu bar icon is separate: an SF Symbol lock.
 - `tools/sensor_probe_v2.swift`: the discovery probe that found the sensors above. Kept so others can check a different Mac model. It is not part of the app or the build.
 

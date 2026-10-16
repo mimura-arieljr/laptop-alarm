@@ -157,6 +157,8 @@ Then remove the topic from the ntfy app.
 
 ## How it works
 
+This is the short version. [docs/TECHNICAL.md](docs/TECHNICAL.md) has the full technical documentation, with diagrams: the privilege model, the arming sequence, sensing and triggers, the control protocol, failure modes and known gaps.
+
 - **The engine** (`Sources/Engine`) is a command line program that runs as root. It wakes the accelerometer, reads the lid angle sensor, plays the siren, blocks sleep, and sends the push.
 - **The menu bar app** (`Sources/App`) runs as you. When you arm, it starts the engine through the macOS administrator prompt, and talks to it over a private socket at `/var/run/laptop-alarm.sock` that only you can use.
 - **The voice** is rendered by the app as you, because macOS `say` is silent when started through the administrator prompt. The engine plays the file.
